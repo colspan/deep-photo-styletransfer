@@ -57,22 +57,22 @@ cmd:option('-style_layers',   'relu1_1,relu2_1,relu3_1,relu4_1,relu5_1', 'layers
 
 
 local function main(params)
-  cutorch.setDevice(params.gpu + 1)
-  cutorch.setHeapTracking(true)
+  --cutorch.setDevice(params.gpu + 1)
+  --cutorch.setHeapTracking(true)
 
   torch.manualSeed(params.seed)
 
-  idx = cutorch.getDevice()
-  print('gpu, idx = ', params.gpu, idx)
+  --idx = cutorch.getDevice()
+  --print('gpu, idx = ', params.gpu, idx)
 
   -- content: pitie transferred input image
   local content_image = image.load(params.content_image, 3)
-  local content_image_caffe = preprocess(content_image):float():cuda()
+  local content_image_caffe = preprocess(content_image):float():float()
   local content_layers = params.content_layers:split(",")
 
   -- style: target model image
   local style_image = image.load(params.style_image, 3)
-  local style_image_caffe = preprocess(style_image):float():cuda()
+  local style_image_caffe = preprocess(style_image):float():float()
   local style_layers = params.style_layers:split(",")
 
   local c, h, w = content_image:size(1), content_image:size(2), content_image:size(3)
@@ -82,7 +82,7 @@ local function main(params)
   -- init: used for initialize the image
   local init_image = image.load(params.init_image, 3)
   init_image = image.scale(init_image, w, h, 'bilinear')
-  local init_image_caffe = preprocess(init_image):float():cuda()
+  local init_image_caffe = preprocess(init_image):float():float()
 
   -- segmentation images
   --[
@@ -106,17 +106,17 @@ local function main(params)
   local net = nn.Sequential()
   
   if params.tv_weight > 0 then
-    local tv_mod = nn.TVLoss(params.tv_weight):float():cuda()
+    local tv_mod = nn.TVLoss(params.tv_weight):float():float()
     net:add(tv_mod)
   end
   
   -- load VGG-19 network
-  local cnn = loadcaffe.load(params.proto_file, params.model_file, params.backend):float():cuda()
+  local cnn = loadcaffe.load(params.proto_file, params.model_file, params.backend):float():float()
 
   -- load matting laplacian
   local CSR_fn = 'gen_laplacian/Input_Laplacian_'..tostring(params.patch)..'x'..tostring(params.patch)..'_1e-7_CSR' .. tostring(index) .. '.mat'
   print('loading matting laplacian...', CSR_fn)
-  local CSR = matio.load(CSR_fn).CSR:cuda()
+  local CSR = matio.load(CSR_fn).CSR:float()
 
   paths.mkdir(tostring(params.serial))
   print('Exp serial:', params.serial)
@@ -150,7 +150,7 @@ local function main(params)
       if name == content_layers[next_content_idx] then
         print("Setting up content layer", i, ":", layer.name)
         local target = net:forward(content_image_caffe):clone()
-        local loss_module = nn.ContentLoss(params.content_weight, target, false):float():cuda()
+        local loss_module = nn.ContentLoss(params.content_weight, target, false):float():float()
         net:add(loss_module)
         table.insert(content_losses, loss_module)
         next_content_idx = next_content_idx + 1
@@ -158,13 +158,13 @@ local function main(params)
     
       if name == style_layers[next_style_idx] then
         print("Setting up style layer  ", i, ":", layer.name)
-        local gram = GramMatrix():float():cuda()
+        local gram = GramMatrix():float():float()
         local target_features = net:forward(style_image_caffe):clone()
 
         local target_grams = {}
 
         for j = 1, #color_codes do 
-          local l_style_mask_ori = color_style_masks[j]:clone():cuda()
+          local l_style_mask_ori = color_style_masks[j]:clone():float()
           local l_style_mask = l_style_mask_ori:repeatTensor(1,1,1):expandAs(target_features)
           local l_style_mean = l_style_mask_ori:mean()
            
@@ -176,7 +176,7 @@ local function main(params)
           table.insert(target_grams, masked_target_gram)
         end 
         
-        local loss_module = nn.StyleLossWithSeg(params.style_weight, target_grams, color_content_masks, color_codes, next_style_idx, false):float():cuda()
+        local loss_module = nn.StyleLossWithSeg(params.style_weight, target_grams, color_content_masks, color_codes, next_style_idx, false):float():float()
         net:add(loss_module)
         table.insert(style_losses, loss_module)
         next_style_idx = next_style_idx + 1
@@ -197,7 +197,7 @@ local function main(params)
   end
   collectgarbage()
 
-  local mean_pixel = torch.CudaTensor({103.939, 116.779, 123.68})
+  local mean_pixel = torch.FloatTensor({103.939, 116.779, 123.68})
   local meanImage = mean_pixel:view(3, 1, 1):expandAs(content_image_caffe)
 
   local img = init_image_caffe  
@@ -281,22 +281,24 @@ local function main(params)
 end
 
 function MattingLaplacian(output, CSR, h, w)
-  local N, c = CSR:size(1), CSR:size(2)
-  local CSR_rowIdx = torch.CudaIntTensor(N):copy(torch.round(CSR[{{1,-1},1}]))
-  local CSR_colIdx = torch.CudaIntTensor(N):copy(torch.round(CSR[{{1,-1},2}]))
-  local CSR_val    = torch.CudaTensor(N):copy(CSR[{{1,-1},3}])
+  local CSR_C = CSR:cuda()
+  local N, c = CSR_C:size(1), CSR_C:size(2)
+  local CSR_rowIdx = torch.CudaIntTensor(N):copy(torch.round(CSR_C[{{1,-1},1}]))
+  local CSR_colIdx = torch.CudaIntTensor(N):copy(torch.round(CSR_C[{{1,-1},2}]))
+  local CSR_val    = torch.CudaTensor(N):copy(CSR_C[{{1,-1},3}])
 
-  local output01 = torch.div(output, 256.0)
+  local output_c = output:cuda()
+  local output01 = torch.div(output_c, 256.0)
 
   local grad = cuda_utils.matting_laplacian(output01, h, w, CSR_rowIdx, CSR_colIdx, CSR_val, N)
   
   grad:div(256.0)
-  return grad
+  return grad:float()
 end  
 
 function SmoothLocalAffine(output, input, epsilon, patch, h, w, f_r, f_e)
-  local output01 = torch.div(output, 256.0)
-  local input01 = torch.div(input, 256.0)
+  local output01 = torch.div(output, 256.0):cuda()
+  local input01 = torch.div(input, 256.0):cuda()
 
 
   local filter_radius = f_r
@@ -308,8 +310,8 @@ function SmoothLocalAffine(output, input, epsilon, patch, h, w, f_r, f_e)
 end 
 
 function ErrorMapLocalAffine(output, input, epsilon, patch, h, w)
-  local output01 = torch.div(output, 256.0)
-  local input01 = torch.div(input, 256.0)
+  local output01 = torch.div(output, 256.0):cuda()
+  local input01 = torch.div(input, 256.0):cuda()
 
   local err_map, best01, Mt_M, invMt_M = cuda_utils.error_map_local_affine(output01, input01, epsilon, patch, h, w)
     
@@ -518,7 +520,7 @@ function StyleLossWithSeg:updateGradInput(input, gradOutput)
   self.gradInput = gradOutput:clone()
   self.gradInput:zero()
   for j = 1, #self.color_codes do 
-    local l_content_mask_ori = self.color_content_masks[j]:clone():cuda()
+    local l_content_mask_ori = self.color_content_masks[j]:clone():float()
     local l_content_mask = l_content_mask_ori:repeatTensor(1,1,1):expandAs(input) 
     local l_content_mean = l_content_mask_ori:mean()
     
@@ -585,9 +587,9 @@ end
 
 function TVGradient(input, gradOutput, strength)
   local C, H, W = input:size(1), input:size(2), input:size(3)
-  local gradInput = torch.CudaTensor(C, H, W):zero()
-  local x_diff = torch.CudaTensor()
-  local y_diff = torch.CudaTensor()
+  local gradInput = torch.FloatTensor(C, H, W):zero()
+  local x_diff = torch.FloatTensor()
+  local y_diff = torch.FloatTensor()
   x_diff:resize(3, H - 1, W - 1)
   y_diff:resize(3, H - 1, W - 1)
   x_diff:copy(input[{{}, {1, -2}, {1, -2}}])
