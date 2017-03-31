@@ -1,3 +1,4 @@
+pkg load image
 addpath matting/
 addpath gaimc/
 N = 60;
@@ -31,6 +32,6 @@ for i = 1:N
     Aj = ci;
     Aval = ai;
     CSR = [Ai, Aj, Aval];
-    save(['Input_Laplacian_3x3_1e-7_CSR' int2str(i) '.mat'], 'CSR');
+    save('-mat-binary', ['Input_Laplacian_3x3_1e-7_CSR' int2str(i) '.mat'], 'CSR');
  
 end 
